@@ -359,6 +359,11 @@ body {
     flex-shrink: 0;
 }
 
+.table-item-badge.count-error {
+    color: var(--warning);
+    background: var(--warning-subtle);
+}
+
 .sidebar-empty {
     padding: 24px 12px;
     text-align: center;
@@ -917,6 +922,7 @@ body {
     display: flex;
     flex-direction: column;
     box-shadow: var(--shadow-lg);
+    overflow-y: auto;
 }
 
 .modal-panel-sm {

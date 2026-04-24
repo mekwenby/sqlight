@@ -14,6 +14,7 @@ let tableRowCounts = {};
 let sqlResultData = null;   // { columns, values, isEditable, sql, executionTime }
 let sqlResultPage = 1;
 const sqlPageSize = 100;
+let originalCellValues = new Map();  // Stores original cell values for editable results
 
 // ─── DOM References ───
 const $ = id => document.getElementById(id);
@@ -126,8 +127,9 @@ function loadTableList() {
         try {
             const result = db.exec(`SELECT COUNT(*) FROM "${name}"`);
             tableRowCounts[name] = result.length > 0 ? result[0].values[0][0] : 0;
-        } catch {
-            tableRowCounts[name] = 0;
+        } catch (err) {
+            console.warn(`无法获取表 "${name}" 的行数:`, err.message);
+            tableRowCounts[name] = '?';
         }
     });
 
@@ -164,9 +166,10 @@ function renderTableList(tableNames) {
     tableList.innerHTML = filtered.map(name => {
         const isActive = name === currentTable;
         const count = tableRowCounts[name] ?? 0;
+        const countDisplay = count === '?' ? '?' : Number(count).toLocaleString();
         return `<li class="table-item ${isActive ? 'active' : ''}" data-table="${name}">
             <span class="table-item-name">${escapeHtml(name)}</span>
-            <span class="table-item-badge">${count.toLocaleString()}</span>
+            <span class="table-item-badge${count === '?' ? ' count-error' : ''}">${countDisplay}</span>
         </li>`;
     }).join('');
 }
@@ -325,7 +328,7 @@ function editRow(rowid) {
     editRowId = rowid;
     modalTitle.textContent = `编辑行 — ${currentTable}`;
 
-    const result = db.exec(`SELECT rowid, * FROM "${currentTable}" WHERE rowid = ${rowid}`);
+    const result = db.exec(`SELECT rowid, * FROM "${currentTable}" WHERE rowid = ?`, [rowid]);
     if (result.length > 0) {
         const row = result[0].values[0];
         renderFormFields(row.slice(1));
@@ -334,22 +337,53 @@ function editRow(rowid) {
 }
 
 function renderFormFields(values = []) {
-    formFields.innerHTML = tableColumns.map((col, i) => `
-        <div class="form-group">
+    formFields.innerHTML = tableColumns.map((col, i) => {
+        const isNumeric = col.type === 'INTEGER' || col.type === 'REAL';
+        const maxLen = isNumeric ? 100 : (col.type.startsWith('VARCHAR') || col.type.startsWith('CHAR')) ? (parseInt(col.type.match(/\((\d+)\)/)?.[1]) || 1000) : 1000;
+        return `<div class="form-group">
             <label class="form-label">
                 ${escapeHtml(col.name)}
                 <span class="form-label-type">${escapeHtml(col.type)}</span>
             </label>
             <input class="form-input" type="text" id="field_${i}" name="${col.name}"
                 value="${values[i] !== undefined ? escapeHtml(String(values[i] ?? '')) : ''}"
-                placeholder="${col.type === 'INTEGER' || col.type === 'REAL' ? '数字' : '文本'}">
-        </div>
-    `).join('');
+                placeholder="${isNumeric ? '数字' : '文本'}"
+                ${isNumeric ? 'inputmode="numeric" ' : ''}
+                maxlength="${maxLen}">
+        </div>`;
+    }).join('');
 }
 
 function saveRow(e) {
     e.preventDefault();
     if (!db || !currentTable) return;
+
+    // Validate all fields before saving
+    for (let i = 0; i < tableColumns.length; i++) {
+        const col = tableColumns[i];
+        const input = document.getElementById(`field_${i}`);
+        const value = input ? input.value.trim() : '';
+
+        // Type validation for INTEGER/REAL
+        if ((col.type === 'INTEGER' || col.type === 'REAL') && value !== '' && value !== 'NULL' && value !== '-' && !/^-?\d+\.?\d*$/.test(value)) {
+            showToast(`列 "${col.name}" 只能输入数字`, 'error');
+            input.focus();
+            return;
+        }
+
+        // Length validation (reasonable limits based on type)
+        let maxLen = 1000;
+        if (col.type === 'INTEGER' || col.type === 'REAL') maxLen = 100;
+        if (col.type.startsWith('VARCHAR') || col.type.startsWith('CHAR')) {
+            const match = col.type.match(/\((\d+)\)/);
+            if (match) maxLen = parseInt(match[1]);
+        }
+        if (value.length > maxLen) {
+            showToast(`列 "${col.name}" 超出长度限制 (最大 ${maxLen})`, 'error');
+            input.focus();
+            return;
+        }
+    }
 
     const values = tableColumns.map((_, i) => {
         const input = document.getElementById(`field_${i}`);
@@ -421,7 +455,8 @@ function executeSql() {
         !normalizedSql.includes('UNION') &&
         !normalizedSql.includes('GROUP BY') &&
         !/\bROWID\b/.test(normalizedSql)) {
-        const fromMatch = normalizedSql.match(/FROM\s+(\w+)/);
+        // Handle quoted and unquoted table names: FROM "name", FROM 'name', or FROM name
+        const fromMatch = normalizedSql.match(/FROM\s+(?:"([^"]+)"|'([^']+)'|([^\s()]+))/);
         if (fromMatch) {
             if (/SELECT\s+\*/i.test(sql)) {
                 execSql = sql.replace(/SELECT\s+\*/i, 'SELECT rowid, *');
@@ -438,6 +473,7 @@ function executeSql() {
 
         if (result.length === 0) {
             sqlResultData = null;
+            originalCellValues.clear();
             sqlResult.innerHTML = `
                 <div class="sql-result-status success">
                     <span>执行成功，无返回结果</span>
@@ -457,6 +493,7 @@ function executeSql() {
                 executionTime
             };
             sqlResultPage = 1;
+            originalCellValues.clear();
 
             if (isEditable) {
                 window.editContext = {
@@ -474,6 +511,7 @@ function executeSql() {
     } catch (error) {
         const executionTime = (performance.now() - startTime).toFixed(2);
         sqlResultData = null;
+        window.editContext = null;
         sqlResult.innerHTML = `
             <div class="sql-result-status error">
                 <span>错误: ${escapeHtml(error.message)}</span>
@@ -510,8 +548,14 @@ function renderSqlResultPage() {
                             ${isEditable ? `<td class="actions-cell"><button class="btn btn-sm btn-primary" onclick="saveEditRow(${rowIndex})">保存</button></td>` : ''}
                             ${row.map((cell, colIndex) => {
                                 const isNull = cell === null || cell === undefined;
-                                return `<td ${isEditable && colIndex > 0 ? `contenteditable="true" data-col="${colIndex - 1}" data-original="${escapeHtml(String(cell ?? ''))}"` : ''} class="${isNull && !isEditable ? 'cell-null' : ''}">
-                                    ${escapeHtml(String(cell ?? 'NULL'))}
+                                const rawValue = isNull ? '' : String(cell ?? '');
+                                if (isEditable && colIndex > 0) {
+                                    originalCellValues.set(`${rowIndex}:${colIndex - 1}`, rawValue);
+                                }
+                                const colType = (tableColumns.find(c => c.name === columns[colIndex]) || {}).type || 'TEXT';
+                                const maxLen = colType.includes('INT') || colType === 'REAL' ? 100 : 1000;
+                                return `<td ${isEditable && colIndex > 0 ? `contenteditable="true" data-col="${colIndex - 1}" data-type="${colType}" data-maxlen="${maxLen}"` : ''} class="${isNull && !isEditable ? 'cell-null' : ''}">
+                                    ${escapeHtml(rawValue || (isNull ? 'NULL' : ''))}
                                 </td>`;
                             }).join('')}
                         </tr>`;
@@ -542,7 +586,8 @@ function checkIfEditable(sql, columns) {
     const normalizedSql = sql.trim().toUpperCase();
     if (!normalizedSql.startsWith('SELECT')) return false;
     if (normalizedSql.includes('JOIN') || normalizedSql.includes('UNION') || normalizedSql.includes('GROUP BY')) return false;
-    return /\bFROM\s+\w+/i.test(normalizedSql);
+    // Handle quoted and unquoted table names: FROM "name", FROM 'name', or FROM name
+    return /FROM\s+(?:"([^"]+)"|'([^']+)'|([^\s()]+))/i.test(normalizedSql);
 }
 
 function saveEditRow(rowIndex) {
@@ -553,9 +598,12 @@ function saveEditRow(rowIndex) {
     const rowid = row[0];
 
     const sql = window.editContext.sql.toUpperCase();
-    const fromMatch = sql.match(/FROM\s+(\w+)/);
+    // Handle quoted and unquoted table names: FROM "name", FROM 'name', or FROM name
+    const fromMatch = sql.match(/FROM\s+(?:"([^"]+)"|'([^']+)'|([^\s()]+))/);
     if (!fromMatch) return;
-    const tableName = fromMatch[1];
+    // fromMatch[1] = double-quoted, [2] = single-quoted, [3] = unquoted
+    const tableName = fromMatch[1] || fromMatch[2] || fromMatch[3];
+    if (!tableName) return;
 
     const tr = document.querySelector(`tr[data-row-index="${rowIndex}"]`);
     const cells = tr.querySelectorAll('td[contenteditable="true"]');
@@ -565,10 +613,23 @@ function saveEditRow(rowIndex) {
 
     cells.forEach(cell => {
         const colIndex = parseInt(cell.dataset.col);
-        const originalValue = cell.dataset.original;
+        const colType = cell.dataset.type || 'TEXT';
+        const maxLen = parseInt(cell.dataset.maxlen) || 1000;
+        const originalValue = originalCellValues.get(`${rowIndex}:${colIndex}`) || '';
         const newValue = cell.textContent.trim();
 
         if (newValue !== originalValue) {
+            // Type validation
+            const isNumeric = colType === 'INTEGER' || colType === 'REAL';
+            if (isNumeric && newValue !== '' && newValue !== 'NULL' && newValue !== '-' && !/^-?\d+\.?\d*$/.test(newValue)) {
+                showToast(`列 "${columns[colIndex]}" 只能输入数字`, 'error');
+                return;
+            }
+            // Length validation
+            if (newValue.length > maxLen) {
+                showToast(`列 "${columns[colIndex]}" 超出长度限制 (最大 ${maxLen})`, 'error');
+                return;
+            }
             updates.push(`"${columns[colIndex]}" = ?`);
             values.push(newValue === 'NULL' ? null : newValue);
         }
@@ -659,16 +720,16 @@ function clearHistory() {
 
 // ─── SQL Templates ───
 function getTemplateSql(template) {
-    const table = currentTable || '{table}';
+    const table = currentTable ? `"${currentTable}"` : '{table}';
     const columns = tableColumns.length > 0
-        ? tableColumns.map(col => col.name).join(', ')
+        ? tableColumns.map(col => `"${col.name}"`).join(', ')
         : '{columns}';
 
     const templates = {
         SELECT: `SELECT * FROM ${table};`,
         INSERT: `INSERT INTO ${table} (${columns}) VALUES (${tableColumns.map(() => "'值'").join(', ')});`,
-        UPDATE: `UPDATE ${table} SET ${tableColumns.length > 0 ? tableColumns[0].name : '{column}'} = '新值' WHERE id = 1;`,
-        DELETE: `DELETE FROM ${table} WHERE id = 1;`,
+        UPDATE: `UPDATE ${table} SET ${tableColumns.length > 0 ? `"${tableColumns[0].name}"` : '{column}'} = '新值' WHERE rowid = 1;`,
+        DELETE: `DELETE FROM ${table} WHERE rowid = 1;`,
         CREATE: `CREATE TABLE new_table (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL\n);`,
         DROP: `DROP TABLE IF EXISTS ${table};`,
         ALTER: `ALTER TABLE ${table} ADD new_column TEXT;`,
@@ -751,7 +812,7 @@ function showAutocomplete() {
     const dropdown = $('autocompleteDropdown');
     dropdown.innerHTML = suggestions.map((item, index) => `
         <div class="autocomplete-item ${index === selectedAutocompleteIndex ? 'active' : ''}"
-             onclick="selectAutocompleteItem('${item.text}')">
+             data-text="${escapeHtml(item.text)}">
             <span class="autocomplete-icon">${item.icon}</span>
             <span class="autocomplete-text">${escapeHtml(item.text)}</span>
             ${item.extra ? `<span class="autocomplete-type">${escapeHtml(item.extra)}</span>` : ''}
@@ -954,6 +1015,14 @@ sqlInput.addEventListener('input', () => {
 // Hide autocomplete on outside click
 document.addEventListener('click', e => {
     if (!e.target.closest('.sql-input-section')) hideAutocomplete();
+});
+
+// Autocomplete item click
+document.addEventListener('click', e => {
+    const item = e.target.closest('.autocomplete-item');
+    if (item && item.dataset.text) {
+        selectAutocompleteItem(item.dataset.text);
+    }
 });
 
 // Global keyboard shortcuts
