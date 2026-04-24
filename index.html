@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQLight</title>
+    <link rel="icon" href="favicon.png" type="image/png">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Toolbar -->
+        <header class="toolbar">
+            <img class="toolbar-logo" src="sqlight-logo.png" alt="SQLight">
+            <span class="toolbar-brand">SQLight</span>
+            <span class="toolbar-db-info" id="dbInfo">
+                <span class="db-dot"></span>
+                <span id="dbFileName">—</span>
+            </span>
+            <div class="toolbar-spacer"></div>
+            <div class="toolbar-actions">
+                <label class="upload-label">
+                    <input type="file" id="dbFileInput" accept=".db,.sqlite,.sqlite3">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M7.25 1.75a.75.75 0 0 1 1.5 0V7.5H14a.75.75 0 0 1 0 1.5H8.75v5.25a.75.75 0 0 1-1.5 0V9H2A.75.75 0 0 1 2 7.5h5.25V1.75Z"/></svg>
+                    打开数据库
+                </label>
+                <button id="exportBtn" class="btn" disabled>
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.75 14A1.75 1.75 0 0 1 1 12.25v-2.5a.75.75 0 0 1 1.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 1.5 0v2.5A1.75 1.75 0 0 1 13.25 14H2.75Z"/><path d="M7.25 7.689V2a.75.75 0 0 1 1.5 0v5.689l1.97-1.969a.749.749 0 1 1 1.06 1.06l-3.25 3.25a.749.749 0 0 1-1.06 0L4.22 6.78a.749.749 0 1 1 1.06-1.06l1.97 1.969Z"/></svg>
+                    导出
+                </button>
+            </div>
+        </header>
+
+        <!-- Main -->
+        <div class="main">
+            <!-- Sidebar -->
+            <aside class="sidebar" id="sidebar">
+                <div class="sidebar-header">
+                    <span class="sidebar-title">表</span>
+                    <span class="sidebar-count" id="tableCount">0</span>
+                </div>
+                <div class="sidebar-search">
+                    <input type="text" id="tableSearch" placeholder="搜索表...">
+                </div>
+                <ul class="table-list" id="tableList">
+                    <li class="sidebar-empty">打开数据库以查看表</li>
+                </ul>
+            </aside>
+
+            <!-- Content -->
+            <main class="content">
+                <!-- Tabs -->
+                <div class="content-tabs" id="contentTabs">
+                    <button class="content-tab active" data-tab="tables">表视图</button>
+                    <button class="content-tab" data-tab="sql">SQL 编辑器</button>
+                </div>
+
+                <!-- Empty State -->
+                <div class="empty-state" id="emptyState">
+                    <div class="empty-icon">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>
+                    </div>
+                    <h2>暂无数据库</h2>
+                    <p>点击「打开数据库」加载一个 SQLite 文件<br>.db / .sqlite / .sqlite3</p>
+                </div>
+
+                <!-- Table View -->
+                <div class="table-view hidden" id="tableView">
+                    <div class="table-toolbar">
+                        <div class="table-toolbar-info">
+                            <span class="table-toolbar-name" id="currentTableName">—</span>
+                            <span class="table-toolbar-meta" id="tableMeta"></span>
+                        </div>
+                        <div class="table-toolbar-actions">
+                            <button id="addRowBtn" class="btn btn-primary btn-sm">添加行</button>
+                            <button id="deleteTableBtn" class="btn btn-danger btn-sm">删除表</button>
+                        </div>
+                    </div>
+                    <div class="data-grid-wrapper">
+                        <table class="data-grid" id="dataTable">
+                            <thead id="tableHead"></thead>
+                            <tbody id="tableBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="pagination-bar" id="paginationBar">
+                        <span class="pagination-info" id="paginationInfo"></span>
+                        <div class="pagination-controls" id="pagination"></div>
+                    </div>
+                </div>
+
+                <!-- SQL Editor -->
+                <div class="sql-editor hidden" id="sqlEditor">
+                    <div class="sql-editor-toolbar">
+                        <button class="sql-template-btn" data-template="SELECT">SELECT</button>
+                        <button class="sql-template-btn" data-template="INSERT">INSERT</button>
+                        <button class="sql-template-btn" data-template="UPDATE">UPDATE</button>
+                        <button class="sql-template-btn" data-template="DELETE">DELETE</button>
+                        <button class="sql-template-btn" data-template="CREATE">CREATE</button>
+                        <button class="sql-template-btn" data-template="DROP">DROP</button>
+                        <button class="sql-template-btn" data-template="ALTER">ALTER</button>
+                        <button class="sql-template-btn" data-template="PRAGMA">PRAGMA</button>
+                    </div>
+                    <div class="sql-input-section">
+                        <textarea id="sqlInput" class="sql-textarea" placeholder="输入 SQL 语句..."></textarea>
+                        <div class="autocomplete-dropdown hidden" id="autocompleteDropdown"></div>
+                    </div>
+                    <div class="sql-action-bar">
+                        <button id="executeSqlBtn" class="btn btn-primary btn-sm">执行</button>
+                        <button id="clearSqlBtn" class="btn btn-sm">清除</button>
+                        <button id="toggleHistoryBtn" class="btn btn-ghost btn-sm">历史记录</button>
+                        <span class="sql-hint">
+                            <kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Enter</kbd> 执行
+                        </span>
+                    </div>
+                    <div class="sql-history hidden" id="sqlHistory">
+                        <div class="sql-history-header">
+                            <h4>历史记录</h4>
+                            <button id="clearHistoryBtn" class="btn btn-ghost btn-sm">清除全部</button>
+                        </div>
+                        <div class="sql-history-list" id="sqlHistoryList"></div>
+                    </div>
+                    <div class="sql-result" id="sqlResult"></div>
+                </div>
+            </main>
+        </div>
+
+        <!-- Status Bar -->
+        <footer class="status-bar">
+            <div class="status-bar-item">
+                <span class="status-bar-dot" id="statusDot"></span>
+                <span id="statusDb">未加载数据库</span>
+            </div>
+            <div class="status-bar-item" id="statusTables">—</div>
+            <div class="status-bar-item" id="statusRows">—</div>
+            <div class="status-bar-spacer"></div>
+            <div class="status-bar-item">SQLight v1.0</div>
+        </footer>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Row Modal -->
+    <div class="modal-overlay hidden" id="rowModal">
+        <div class="modal-panel">
+            <div class="modal-header">
+                <h3 id="modalTitle">添加行</h3>
+                <button class="modal-close" id="modalClose">&times;</button>
+            </div>
+            <form id="rowForm">
+                <div class="modal-body" id="formFields"></div>
+                <div class="modal-footer">
+                    <button type="button" class="btn" id="cancelBtn">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Confirm Modal -->
+    <div class="modal-overlay hidden" id="confirmModal">
+        <div class="modal-panel modal-panel-sm">
+            <div class="modal-header">
+                <h3 id="confirmTitle">确认</h3>
+            </div>
+            <div class="modal-body">
+                <p id="confirmMessage"></p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" id="confirmCancel">取消</button>
+                <button class="btn btn-danger" id="confirmOk">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="lib/sql.js/sql-wasm.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
